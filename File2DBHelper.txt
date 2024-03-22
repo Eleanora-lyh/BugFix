@@ -1,0 +1,334 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Reflection.Emit;
+using System.Text;
+using System.Threading.Tasks;
+using Admin.NET.Core.Entity.SDS;
+using Furion.FriendlyException;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Spire.Pdf;
+using Spire.Pdf.Bookmarks;
+using Spire.Pdf.Fields;
+using Spire.Pdf.General;
+using Spire.Pdf.Graphics;
+using Spire.Pdf.Grid;
+using Spire.Pdf.Texts;
+
+namespace Admin.NET.Core.Util.SDS
+{
+    /// <summary>
+    /// 文件帮助类：文件转byte数组，byte数组转文件
+    /// </summary>
+    public static class File2DBHelper
+    {
+        /// <summary>
+        /// 根据picType将byte数组转为File
+        /// </summary>
+        /// <param name="byteFile">byte数组</param>
+        /// <param name="fileType">文件类型</param>
+        /// <returns></returns>
+        public static dynamic Byte2File(byte[] byteFile, string fileType)
+        {
+            var res = new FileContentResult(byteFile, fileType);
+            return res;
+        }
+        /// <summary>
+        /// 将File转为byte数组
+        /// </summary>
+        /// <param name="IFormFile">文件，file.ContentType获取文件类型</param>
+        /// <returns></returns>
+        public static async Task<dynamic> File2Byte(IFormFile file)
+        {
+            if (file == null || file.Length <= 0)
+            {
+                throw new Exception("文件为空，请选择上传的文件！");
+            }
+            using (var stream = new MemoryStream())
+            {
+                await file.CopyToAsync(stream);//取到文件流
+                return stream.ToArray();
+            }
+        }
+        /// <summary>
+        /// 将byte数组转为下载的文件（下载用）
+        /// </summary>
+        /// <param name="IFormFile">文件，file.ContentType获取文件类型</param>
+        /// <returns></returns>
+        public static dynamic Byte2DownloadFile(byte[] bytePdf, string fileType, string fileName)
+        {
+            var res = new FileContentResult(bytePdf, fileType)
+            {
+                FileDownloadName = fileName
+            };
+            return res;
+        }
+        /// <summary>
+        /// 将byte数组转为Stream
+        /// </summary>
+        /// <param name="byteFile">byte数组</param>
+        /// <param name="fileType">文件类型</param>
+        /// <returns></returns>
+        public static dynamic Byte2Stream(byte[] byteFile)
+        {
+            var res = new MemoryStream(byteFile);
+            return res;
+        }
+        /// <summary>
+        /// 读取数据库中数据，生成模板pdf
+        /// </summary>
+        /// <param name="path">文件路径</param>
+
+        public static byte[]? Db2BytePdf(SDSTemplate template, CategoryIdentity category)
+        {
+
+            //1、创建PdfDocument实例（pdf文档）
+            PdfDocument pdf = new PdfDocument();
+            //2、文档中添加一页
+            PdfPageBase page = pdf.Pages.Add();
+
+            //创建PDF grid
+            PdfGrid grid = new PdfGrid();
+            #region 3、添加34行8列
+            for (int i = 0; i < 34; i++)
+            {
+                grid.Rows.Add();
+            }
+            //添加8列
+            grid.Columns.Add(8);
+            #endregion
+            #region 4、表格初始化配置
+            //添加文字位置的设置
+            var textCenter = new PdfStringFormat(PdfTextAlignment.Center, PdfVerticalAlignment.Middle);
+            var textLeft = new PdfStringFormat(PdfTextAlignment.Left, PdfVerticalAlignment.Middle);
+            var textRight = new PdfStringFormat(PdfTextAlignment.Right, PdfVerticalAlignment.Middle);
+            //添加文字字型的设置
+            //设置单元格内的字体为宋体，大小为6，字型为正常(无加粗)，最后的true防止中文乱码
+            var normalTextFont = new PdfTrueTypeFont(new Font("宋体", 9, FontStyle.Regular), true);
+            //设置单元格内的字体为宋体，大小为6，字型为加粗，最后的true防止中文乱码
+            var BoldTextFont = new PdfTrueTypeFont(new Font("宋体", 9, FontStyle.Bold), true);
+            #endregion
+            PdfStringFormat format = new PdfStringFormat();
+            format.MeasureTrailingSpaces = true;
+            #region
+
+            #region 第0行：物料安全资料
+            grid.Rows[0].Cells[0].Value = "物料安全资料";
+            grid.Rows[0].Cells[0].ColumnSpan = 8; //合并8列
+            grid.Rows[0].Cells[0].StringFormat = textCenter;
+            grid.Rows[0].Cells[0].Style.Font = new PdfTrueTypeFont(new Font("宋体", 12, FontStyle.Bold), true);
+            grid.Rows[0].Height = 30f;
+            #endregion
+            #region 第1行： 单独处理适用范围那行
+            PdfGrid gridare = new PdfGrid();
+            PdfGridRow gridarerow = gridare.Rows.Add();
+            gridare.Columns.Add(4);
+            var tmpList = new List<string>() { "适用范围:", "物料储存区域、物料使用区域", "NO:", template.SerialNo+"(通过按规则生成)" };
+            var tmpIndex = 0;
+            var leftWidth = 526f; //总共的宽度为60*7+90+4*4=526f
+            for (int i = 0; i < 4; i++)
+            {
+                gridarerow.Cells[i].Style.Font = normalTextFont;//第1行的所有单元格内的字体都为9号宋体
+                gridarerow.Cells[i].Style.Borders = new PdfBorders() //设置无边框格式
+                {
+                    All = new PdfPen(Color.White, 0f)
+                };
+                //给每列key赋值
+                gridarerow.Cells[i].Value = tmpList[tmpIndex++];
+                //计算每列key占的宽度
+                var textWith = GetCellWidth(gridarerow.Cells[i]);
+                gridare.Columns[i].Width = textWith;
+                leftWidth -= textWith;//No列长度=总长度526f-其他列宽度
+                if (i <= 1) //前两个左对齐，后两个右对齐
+                    gridarerow.Cells[i].StringFormat = textLeft;
+                else
+                    gridarerow.Cells[i].StringFormat = textRight;
+            }
+            gridare.Columns[2].Width = leftWidth;
+
+            grid.Rows[1].Cells[0].ColumnSpan = 8;
+            grid.Rows[1].Cells[0].Value = gridare;
+            #endregion
+
+            #region 第2-6行：一、标识 + 二、健康危害
+            List<string> nameList0 = new List<string> { "中文名", "英文名", "俗称", "化学式", "资料来源", "引用标准", "侵入途径", "健康危害" };
+            List<string> valueList0 = new List<string> { template.ChineseName, template.EnglishName, template.Vulgo, template.ChemicalFormula, template.DataSource, template.ReferenceStandard, template.InvasionRoute, template.HealthHazard };
+            var index0 = 0;
+            grid.Rows[2].Cells[0].Value = "一、标识"; grid.Rows[2].Cells[0].RowSpan = 3;//标识合并3行
+            grid.Rows[5].Cells[0].Value = "二、健康危害";//健康危害合并2行
+            grid.Rows[5].Cells[0].RowSpan = 2;
+            //标识的2、3、4 行中列 1、4填入列名；2、5填入列值
+            for (int i = 2; i < 7; i++)
+            {
+                if (i <= 4) //2-4行除表头有两列名称
+                {
+                    grid.Rows[i].Cells[1].Value = nameList0[index0];
+                    grid.Rows[i].Cells[2].ColumnSpan = 2; //值合并两列
+                    grid.Rows[i].Cells[2].Value = valueList0[index0++]; //值合并两列,更新index0
+
+                    grid.Rows[i].Cells[4].Value = nameList0[index0];
+                    grid.Rows[i].Cells[5].ColumnSpan = 2; //值合并两列
+                    grid.Rows[i].Cells[5].Value = valueList0[index0++]; //值合并两列,更新index0
+                }
+                else//5-6行除表头有一列名称
+                {
+                    grid.Rows[i].Cells[1].Value = nameList0[index0];
+                    grid.Rows[i].Cells[2].ColumnSpan = 5;//值合并5列
+                    grid.Rows[i].Cells[2].Value = valueList0[index0++];//值合并6列
+                }
+            }
+            //图片占据4行
+            grid.Rows[2].Cells[7].Value = category.RiskChemicalCategory;
+            grid.Rows[3].Cells[7].RowSpan = 4;
+            #endregion
+
+            #region 第7-18行：大标题的三到七。 注：nameList1中的" "对应的值是 泄露应急处理的值
+            List<string> nameList1 = new List<string> { "主要成分", "外观与形状", "主要用途", "皮肤接触", "眼睛接触", "吸入", "食入", "灭火方法", "危险特性", " ", "操作注意", "储运注意" };
+            List<string> valueList1 = new List<string> { template.MainIngredient, template.AppearanceShape, template.MainUsage, template.SkinContact, template.EyeContact, template.Inhalation, template.Ingestion, template.FireExtinguish, template.HazardousProperty, template.EmergencyTreatment, template.OperationCaution, template.TransportCaution };
+            grid.Rows[7].Cells[0].Value = "三、主要组成信息"; grid.Rows[7].Cells[0].RowSpan = 3;
+            grid.Rows[10].Cells[0].Value = "四、急救措施"; grid.Rows[10].Cells[0].RowSpan = 4;
+            grid.Rows[14].Cells[0].Value = "五、消防措施"; grid.Rows[14].Cells[0].RowSpan = 2;
+            grid.Rows[16].Cells[0].Value = "六、泄露应急处理"; grid.Rows[16].Cells[0].ColumnSpan = 2;
+            grid.Rows[17].Cells[0].Value = "七、操作处置与储存"; grid.Rows[17].Cells[0].RowSpan = 2;
+            for (int i = 7; i < 19; i++)
+            {
+                // 16泄露应急处理 合并2列 单独处理
+                if (i != 16) grid.Rows[i].Cells[1].Value = nameList1[i - 7];
+                grid.Rows[i].Cells[2].ColumnSpan = 6;//值合并6列
+                grid.Rows[i].Cells[2].Value = valueList1[i - 7];//值合并6列
+            }
+            #endregion
+            #region 第19-24行 大标题的八到九 
+            List<string> nameList2 = new List<string> { "手防护", "身体防护", "呼吸系统防护", "眼镜防护", "其他", "熔点", "沸点", "相对密度", "溶解性", "燃烧产物", "禁忌物" };
+            List<string> valueList2 = new List<string> { template.HandProtection, template.BodyProtection, template.BreathingProtection, template.EyewearProtetion, template.OtherProtection, template.MeltingPoint, template.BoilingPoint, template.RelativeDensity, template.Resolvable, template.CombustionProduct, template.Taboos };
+            grid.Rows[19].Cells[0].Value = "八、接触控制与个体防护"; grid.Rows[19].Cells[0].RowSpan = 3;
+            grid.Rows[22].Cells[0].Value = "九、理化性质"; grid.Rows[22].Cells[0].RowSpan = 3;
+            var index2 = 0;
+            // 大标题的八九 只有21没有第二列名
+            for (int i = 19; i < 25; i++)
+            {
+                if (i == 21)// 21其他 合并6列需要单独处理
+                {
+                    grid.Rows[i].Cells[1].Value = nameList2[index2];
+                    grid.Rows[i].Cells[2].ColumnSpan = 6;//值合并2列
+                    grid.Rows[i].Cells[2].Value = valueList2[index2++];
+                }
+                else
+                {
+                    grid.Rows[i].Cells[1].Value = nameList2[index2];
+                    grid.Rows[i].Cells[2].ColumnSpan = 2;//值合并2列
+                    grid.Rows[i].Cells[2].Value = valueList2[index2++];
+
+                    grid.Rows[i].Cells[4].Value = nameList2[index2];
+                    grid.Rows[i].Cells[5].ColumnSpan = 3;//值合并3列
+                    grid.Rows[i].Cells[5].Value = valueList2[index2++];
+                }
+            }
+            #endregion
+            #region 第25-31行
+            List<string> nameList3 = new List<string> { "十、稳定性与反应活性", "十一、毒理学信息", "十二、生态学信息", "十三、废弃处置", "十四、运输信息", "十五、法规信息", "十六、其他信息" };
+            List<string> valueList3 = new List<string> { template.StabilityReactivity, template.ToxicologicalInfo, template.EcologicalInfo, template.Disposal, template.TransportInfo, template.RegulatoryInfo, template.OtherInfo };
+            for (int i = 25; i < 32; i++)
+            {
+                grid.Rows[i].Cells[0].Value = nameList3[i - 25];
+                grid.Rows[i].Cells[0].ColumnSpan = 2;
+                grid.Rows[i].Cells[2].Value = valueList3[i - 25];
+                grid.Rows[i].Cells[2].ColumnSpan = 6;
+            }
+            #endregion
+            grid.Rows[32].Cells[0].Value = "制造厂家"; grid.Rows[32].Cells[1].ColumnSpan = 3; grid.Rows[32].Cells[1].Value = template.Manufacturer;
+            grid.Rows[32].Cells[4].Value = "使用单位"; grid.Rows[32].Cells[5].ColumnSpan = 3; grid.Rows[32].Cells[5].Value = template.Usagedepartment;
+            grid.Rows[33].Cells[0].Value =
+            "注：1.资料来源由供应商提供。 2.“/”表示无相关信息；3.“*”表示未查找到相关资料。3.原版由供应公司盖章，现场存放需加盖使用单位、部门章。 各发放部门内部根据化学品使用和储存区域再行二次受控发放，需将对应的SDS张贴至现场";
+            grid.Rows[33].Cells[0].ColumnSpan = 8;
+            #endregion
+
+            #region 设置边框格式
+            PdfBorders borders = new PdfBorders();
+            borders.All = new PdfPen(Color.Black, 0.1f);
+            foreach (PdfGridRow pgr in grid.Rows)
+            {
+                //pgr.Height = 20f;
+                foreach (PdfGridCell pgc in pgr.Cells)
+                {
+                    pgc.Style.Borders = borders;
+                }
+            }
+            #endregion
+            #region 设置表格格式
+            //最后一列因为有图片加宽
+            var widthList = new List<float>() { 70f, 45f, 80f, 80f, 45f, 50f, 50f, 90f };
+            //获取列宽
+            for (int i = 0; i < grid.Columns.Count; i++)
+            {
+                grid.Columns[i].Width = widthList[i];
+            }
+            //设置单元格内容和边框之间的距离
+            grid.Style.CellPadding = new PdfPaddings(3, 3, 1, 1);
+            grid.Rows[1].Style.CellPadding = new PdfPaddings(0, 0, 1, 1);
+
+            //先初始化全局文字位置
+            var maxH = 0f;
+            for (int i = 2; i < grid.Rows.Count(); i++)
+            {
+                if (i >= 3 && i <= 6) //计算图片的高度
+                    maxH += grid.Rows[i].Height;
+                foreach (PdfGridCell cell in grid.Rows[i].Cells)
+                {
+                    cell.StringFormat = textLeft;
+                    cell.Style.Font = normalTextFont;
+                }
+            }
+          
+            //加载图片
+            PdfGridCellContentList contentList = new PdfGridCellContentList();
+            PdfGridCellContent content = new PdfGridCellContent();
+            if (category.PictureType == null)
+            {
+                grid.Rows[3].Cells[7].Value = "此类别标识暂时未绑定图片";
+            }
+            else
+            {
+                content.Image = PdfImage.FromStream(Byte2Stream(category.Picture));
+                var zoomH = ((float)content.Image.Height / (float)content.Image.Width) * 84f;
+                if (zoomH > maxH) zoomH = maxH;
+                content.ImageSize = new SizeF(84, zoomH);
+                contentList.List.Add(content);
+                grid.Rows[3].Cells[7].Value = contentList;//标识的图片合并4行
+            }
+            #endregion
+            //将表格绘制在页面上
+            grid.Draw(page, new PointF(0, 0));
+            for (int i=0;i< pdf.Pages.Count; i++)
+            {
+                var x = pdf.Pages[i];
+                var ptr = new PdfTextReplacer(x);
+                ptr.ReplaceAllText("Evaluation Warning : The document was created with Spire.PDF for .NET", "");
+            }
+            
+            
+           
+            //保存文档
+            //Byte2DownloadFile()
+            using (var stream = new MemoryStream())
+            {
+                pdf.SaveToStream(stream);
+                return stream.ToArray();
+            }
+        }
+        /// <summary>
+        /// 根据单元格cell的属性求取单元格内文字的宽度
+        /// </summary>
+        /// <param name="cell"></param>
+        /// <returns></returns>
+        private static float GetCellWidth(PdfGridCell cell)
+        {
+            //取除font大小、format字形下text的宽度 
+            var textWith = cell.Style.Font.MeasureString(cell.Value.ToString(), cell.StringFormat).Width;
+            return textWith + 2.5f;
+        }
+    }
+}
